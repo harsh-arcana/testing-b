@@ -1,0 +1,50 @@
+name: Auto-merge dependent PRs
+on:
+  pull_request:
+    types: [closed]     # fires when the PR is closed (merged or not)
+    branches: [main]    # trigger only for PRs into main
+
+permissions:           # only needed for GITHUB_TOKEN; PAT already has rights
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge_dependents:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}   # PAT with repo: scope
+      ORG: your-org-name                       # <<< change once
+    steps:
+      - name: Install GitHub CLI
+        uses: cli/cli-action@v2
+      
+      - name: Derive search term
+        id: vars
+        run: |
+          echo "dep_ref=${ORG}/${{ github.event.repository.name }}#${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Find open PRs that depend on this one
+        id: search
+        run: |
+          dependents=$(gh search issues \
+            --owner "$ORG" \
+            --state open \
+            --search "Depends on: ${ { steps.vars.outputs.dep_ref } }" \
+            --json repository,name,number \
+            --jq '.[] | "\(.repository.name) \(.number)"')
+          echo "deps<<EOF" >> $GITHUB_OUTPUT
+          echo "$dependents" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Merge each dependent PR
+        if: steps.search.outputs.deps != ''
+        run: |
+          while read repo pr; do
+            echo "🔗 Attempting to merge $repo PR #$pr"
+            if gh pr merge "$pr" --repo "$ORG/$repo" --merge --delete-branch --auto --admin; then
+              echo "✅ Merged $repo#$pr"
+            else
+              echo "❌ Could not merge $repo#$pr" >&2
+            fi
+          done <<< "${{ steps.search.outputs.deps }}"
