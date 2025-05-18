@@ -1,3 +1,3 @@
 # testing-b
 
-test-prb1
+test-prb1-extra
